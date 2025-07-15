@@ -1,5 +1,7 @@
 # Match Prediction API
 
+> **Live Demo:** [https://beta-v3-zs2y.onrender.com/](https://beta-v3-zs2y.onrender.com/)
+
 > **Note:** This project is the successor to the original [beta-v2 (Flask-based) project](https://github.com/dai16240/beta-v2). This new version is a complete rewrite using modern technologies like FastAPI, asynchronous scraping, and a more advanced model selection pipeline.
 
 This project is a complete, high-performance web API that scrapes football match data, trains multiple machine learning models to find the best one, and provides predictions for future matches based on betting odds.
@@ -116,7 +118,10 @@ This modular architecture ensures that the API remains fast and responsive while
 
 ## API Endpoints
 
-The interactive API documentation is available at `http://127.0.0.1:8000/docs` when the server is running.
+The interactive API documentation (Swagger UI) is the best way to explore and test the endpoints. Once the application is running, you can access it at:
+
+- **Locally:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Live Demo:** [https://beta-v3-zs2y.onrender.com/docs](https://beta-v3-zs2y.onrender.com/docs)
 
 ### Training
 
