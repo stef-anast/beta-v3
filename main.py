@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, APIRouter, Security
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -119,6 +120,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# --- CORS Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # --- Dependency for getting a DB session ---
 async def get_db():
     async with async_session() as session:
@@ -171,9 +181,9 @@ def get_training_status(task_id: str, request: Request):
 async def get_predictions(match_date: str, request: Request, db: AsyncSession = Depends(get_db)):
     """
     Returns predictions for a given date.
-    - Checks if data for the date exists in the DB.
-    - If not, scrapes the data and saves it.
-    - Uses the pre-trained model to make predictions.
+    - Scrapes the data for the requested date to ensure it's up-to-date.
+    - Saves the fresh data to the database, overwriting any old data for that date.
+    - Uses the pre-trained model to make predictions on the new data.
     """
     try:
         parsed_date = datetime.strptime(match_date, "%Y-%m-%d").date()
@@ -183,20 +193,26 @@ async def get_predictions(match_date: str, request: Request, db: AsyncSession = 
     if not request.app.state.ml_models.get('best_model'):
         raise HTTPException(status_code=503, detail="Model not loaded. Please train a model first via the /train-model endpoint.")
 
+    # Always scrape fresh data for the requested date
+    logging.info(f"Scraping fresh data for {match_date}...")
+    scraped_data = await scraper.scrape_agones(f"https://agones.gr/ticker_minisite_show.php?navigation=yes&date={match_date}")
+    
+    if scraped_data is None or scraped_data.empty:
+        raise HTTPException(status_code=404, detail=f"Could not find or scrape any match data for {match_date}.")
+    
+    # Process and save the fresh data
+    scraped_data['Date'] = match_date
+    if 'ΣΚΟΡ' in scraped_data.columns:
+        scraped_data['Result'] = scraped_data['ΣΚΟΡ'].apply(scraper.get_match_result)
+    
+    await crud.bulk_insert_matches(db, scraped_data)
+    
+    # Retrieve the freshly saved data to ensure consistency
     matches_df = await crud.get_matches_by_date_as_dataframe(db, parsed_date)
 
     if matches_df.empty:
-        logging.info(f"No data found in DB for {match_date}. Scraping now...")
-        scraped_data = await scraper.scrape_agones(f"https://agones.gr/ticker_minisite_show.php?navigation=yes&date={match_date}")
-        if scraped_data is None or scraped_data.empty:
-            raise HTTPException(status_code=404, detail=f"Could not find or scrape any match data for {match_date}.")
-        
-        scraped_data['Date'] = match_date
-        if 'ΣΚΟΡ' in scraped_data.columns:
-            scraped_data['Result'] = scraped_data['ΣΚΟΡ'].apply(scraper.get_match_result)
-        
-        await crud.bulk_insert_matches(db, scraped_data)
-        matches_df = await crud.get_matches_by_date_as_dataframe(db, parsed_date)
+        # This case should ideally not be reached if scraping was successful
+        raise HTTPException(status_code=404, detail=f"No match data available for {match_date} after scraping.")
 
     odds_columns = ['odds_1', 'odds_x', 'odds_2']
     for col in odds_columns:

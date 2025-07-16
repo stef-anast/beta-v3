@@ -26,8 +26,8 @@ COLUMN_MAPPING = {
 
 async def bulk_insert_matches(db: AsyncSession, df: pd.DataFrame):
     """
-    Takes a DataFrame of scraped matches, cleans it, and saves new entries to the database.
-    It skips any matches that are already present.
+    Takes a DataFrame of scraped matches for a SINGLE date and saves them to the database.
+    It first deletes all existing matches for that date to ensure data is fresh.
     """
     # Rename columns to match the database model
     df_renamed = df.rename(columns=COLUMN_MAPPING)
@@ -36,6 +36,22 @@ async def bulk_insert_matches(db: AsyncSession, df: pd.DataFrame):
     df_renamed['match_date'] = pd.to_datetime(df_renamed['match_date']).dt.date
     for col in ['odds_1', 'odds_x', 'odds_2']:
         df_renamed[col] = pd.to_numeric(df_renamed[col], errors='coerce')
+
+    # Get the single date we are processing
+    if 'match_date' not in df_renamed.columns or df_renamed['match_date'].nunique() > 1:
+        # If there are no rows, this check is moot. If there are, they must all be for one date.
+        if not df_renamed.empty:
+            raise ValueError("The input DataFrame for bulk insert should only contain matches for a single date.")
+        # If the dataframe is empty, we can just return, nothing to do.
+        print("Received an empty DataFrame. No database operations will be performed.")
+        return
+
+    target_date = df_renamed['match_date'].iloc[0]
+
+    # Delete existing matches for this date
+    await db.execute(
+        delete(models.Match).where(models.Match.match_date == target_date)
+    )
 
     new_matches_to_add = []
     for _, row in df_renamed.iterrows():
@@ -49,9 +65,10 @@ async def bulk_insert_matches(db: AsyncSession, df: pd.DataFrame):
     if new_matches_to_add:
         db.add_all(new_matches_to_add)
         await db.commit()
-        print(f"Successfully added {len(new_matches_to_add)} new matches to the database.")
+        print(f"Successfully upserted {len(new_matches_to_add)} matches for date {target_date}.")
     else:
-        print("No new matches to add. Data may already be up to date.")
+        await db.commit() # Commit the delete transaction even if there's nothing new to add
+        print(f"No new matches to add for {target_date}. Existing data for this date has been cleared.")
 
 
 async def get_all_matches_as_dataframe(db: AsyncSession) -> pd.DataFrame:
